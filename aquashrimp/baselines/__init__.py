@@ -1,0 +1,1 @@
+# Baseline agents for AquaShrimp

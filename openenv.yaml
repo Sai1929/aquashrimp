@@ -1,0 +1,53 @@
+name: aquashrimp
+version: "1.0.0"
+description: >
+  AquaShrimp: Precision shrimp (prawn) aquaculture operations management environment.
+  Agent manages Litopenaeus vannamei farms making daily decisions about feeding,
+  water quality, disease prevention, and harvest timing.
+  Three tasks: NurseryPond (easy), SemiIntensiveFarm (medium), CommercialGrowOut (hard).
+  First OpenEnv environment for shrimp aquaculture. Impacts a $40B/year global industry.
+author: aquashrimp-team
+tasks:
+  - id: nursery_pond
+    display_name: "NurseryPond (Easy)"
+    max_steps: 30
+    env_var: "AQUASHRIMP_TASK=1"
+    description: "Single 0.1ha pond. Control daily feed, aeration, water exchange."
+  - id: semi_intensive_farm
+    display_name: "SemiIntensiveFarm (Medium)"
+    max_steps: 60
+    env_var: "AQUASHRIMP_TASK=2"
+    description: "4 ponds, shared aerators, Vibrio outbreak, partial harvest decisions."
+  - id: commercial_grow_out
+    display_name: "CommercialGrowOut (Hard)"
+    max_steps: 90
+    env_var: "AQUASHRIMP_TASK=3"
+    description: "10 ponds across 2 sites. WSSV outbreak, market timing, export compliance."
+reward:
+  range: [-1.0, 1.0]
+  components:
+    growth:
+      weights:
+        nursery_pond: 0.35
+        semi_intensive_farm: 0.30
+        commercial_grow_out: 0.25
+    water:
+      weights:
+        nursery_pond: 0.35
+        semi_intensive_farm: 0.25
+        commercial_grow_out: 0.20
+    economic:
+      weights:
+        nursery_pond: 0.20
+        semi_intensive_farm: 0.30
+        commercial_grow_out: 0.35
+    biosecurity:
+      weights:
+        nursery_pond: 0.10
+        semi_intensive_farm: 0.15
+        commercial_grow_out: 0.20
+grade:
+  range: [0.0, 1.0]
+  description: "Normalized episode grade. 0.0=worst, 0.5=neutral, 1.0=best."
+  formula: "(mean_per_step_reward + 1.0) / 2.0"
+  endpoint: "GET /grade"

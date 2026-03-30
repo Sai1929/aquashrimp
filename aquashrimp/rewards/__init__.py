@@ -1,0 +1,1 @@
+# Reward calculator for AquaShrimp
