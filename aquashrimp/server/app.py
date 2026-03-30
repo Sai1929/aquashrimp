@@ -1,43 +1,54 @@
 """FastAPI application factory for AquaShrimp.
 
-Task selected via AQUASHRIMP_TASK environment variable (1, 2, or 3).
-Deploy 3 HuggingFace Spaces from one Docker image by setting AQUASHRIMP_TASK.
+All 3 tasks are served from a single app under /task/1, /task/2, /task/3.
+The legacy root endpoints (/reset, /step, /grade, /state) still work and
+are routed to the task set by AQUASHRIMP_TASK env var (default 1).
 """
 import os
 from fastapi import FastAPI
-from aquashrimp.server.router import router
+from aquashrimp.server.router import make_router, router as default_router
 
 TASK_NAMES = {
-    "1": "NurseryPond (Easy)",
-    "2": "SemiIntensiveFarm (Medium)",
-    "3": "CommercialGrowOut (Hard)",
+    1: "NurseryPond (Easy)",
+    2: "SemiIntensiveFarm (Medium)",
+    3: "CommercialGrowOut (Hard)",
 }
-
-task_id = os.environ.get("AQUASHRIMP_TASK", "1")
-task_name = TASK_NAMES.get(task_id, "Unknown")
 
 app = FastAPI(
     title="AquaShrimp OpenEnv",
-    description=f"Shrimp aquaculture operations environment — Task: {task_name}",
+    description="Shrimp aquaculture operations environment — all 3 tasks in one Space",
     version="1.0.0",
 )
 
-app.include_router(router)
+# Legacy root endpoints (backward compat — reads AQUASHRIMP_TASK, default task 1)
+app.include_router(default_router)
+
+# All 3 tasks mounted at /task/{id}
+for _tid in [1, 2, 3]:
+    app.include_router(
+        make_router(_tid),
+        prefix=f"/task/{_tid}",
+        tags=[TASK_NAMES[_tid]],
+    )
 
 
-@app.get("/")
+@app.get("/", tags=["Info"])
 async def root():
     return {
         "name": "openenv-aquashrimp",
         "version": "1.0.0",
-        "task": task_name,
-        "task_id": int(task_id),
-        "endpoints": {
-            "reset": "POST /reset",
-            "step": "POST /step",
-            "state": "GET /state",
-            "health": "GET /health",
-        },
         "species": "Litopenaeus vannamei (Whiteleg shrimp)",
         "reward_range": [-1.0, 1.0],
+        "tasks": {
+            str(tid): {
+                "name": TASK_NAMES[tid],
+                "reset":  f"/task/{tid}/reset",
+                "step":   f"/task/{tid}/step",
+                "grade":  f"/task/{tid}/grade",
+                "state":  f"/task/{tid}/state",
+                "health": f"/task/{tid}/health",
+            }
+            for tid in [1, 2, 3]
+        },
+        "docs": "/docs",
     }
