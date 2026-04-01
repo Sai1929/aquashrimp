@@ -80,15 +80,29 @@ def get_llm_action(client: OpenAI, model: str, obs: dict) -> dict:
     }
     user_msg = f"Current farm observation (day {obs.get('day', 0)}):\n{json.dumps(obs_summary, indent=2)}\n\nWhat action do you take?"
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.1,
-        max_tokens=256,
-    )
+    def _fallback_action() -> dict:
+        return {
+            "feed_kg": float(obs.get("feed_demand_estimate_kg", 8.0)),
+            "feeding_frequency": 4,
+            "aeration_hours": 20.0,
+            "water_exchange_frac": 0.05,
+            "check_feeding_trays": True,
+            "lime_application_kg": 5.0 if obs.get("ph", 8.0) < 7.8 else 0.0,
+        }
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.1,
+            max_tokens=256,
+        )
+    except Exception as e:
+        print(f"  [LLM API error: {e}] — using rule-based fallback", flush=True)
+        return _fallback_action()
 
     content = response.choices[0].message.content.strip()
 
@@ -101,15 +115,7 @@ def get_llm_action(client: OpenAI, model: str, obs: dict) -> dict:
                 content = content[4:]
         return json.loads(content.strip())
     except json.JSONDecodeError:
-        # Fallback to safe default action if LLM response is malformed
-        return {
-            "feed_kg": float(obs.get("feed_demand_estimate_kg", 8.0)),
-            "feeding_frequency": 4,
-            "aeration_hours": 20.0,
-            "water_exchange_frac": 0.05,
-            "check_feeding_trays": True,
-            "lime_application_kg": 5.0 if obs.get("ph", 8.0) < 7.8 else 0.0,
-        }
+        return _fallback_action()
 
 
 # ── Episode runner ─────────────────────────────────────────────────────────────
