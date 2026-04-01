@@ -7,7 +7,7 @@ COPY pyproject.toml uv.lock ./
 COPY aquashrimp/__init__.py ./aquashrimp/
 RUN uv pip install --system --no-cache \
     "fastapi>=0.115.0" "uvicorn[standard]>=0.30.0" \
-    "pydantic>=2.7.0" "numpy>=1.26.0" "openenv-core>=0.2.0"
+    "pydantic>=2.7.0" "numpy>=1.26.0" "openenv-core>=0.2.0" "openai>=1.0.0"
 
 FROM python:3.11-slim AS runtime
 # curl needed for HEALTHCHECK
