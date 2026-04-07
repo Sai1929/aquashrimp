@@ -1,5 +1,10 @@
+spec_version: 1
 name: aquashrimp
 version: "1.0.0"
+type: space
+runtime: fastapi
+app: aquashrimp.server.app:app
+port: 7860
 description: >
   AquaShrimp: Precision shrimp (prawn) aquaculture operations management environment.
   Agent manages Litopenaeus vannamei farms making daily decisions about feeding,
@@ -13,16 +18,25 @@ tasks:
     max_steps: 30
     env_var: "AQUASHRIMP_TASK=1"
     description: "Single 0.1ha pond. Control daily feed, aeration, water exchange."
+    grader:
+      endpoint: "GET /task/1/grade"
+      score_range: [0.0, 1.0]
   - id: semi_intensive_farm
     display_name: "SemiIntensiveFarm (Medium)"
     max_steps: 60
     env_var: "AQUASHRIMP_TASK=2"
     description: "4 ponds, shared aerators, Vibrio outbreak, partial harvest decisions."
+    grader:
+      endpoint: "GET /task/2/grade"
+      score_range: [0.0, 1.0]
   - id: commercial_grow_out
     display_name: "CommercialGrowOut (Hard)"
     max_steps: 90
     env_var: "AQUASHRIMP_TASK=3"
     description: "10 ponds across 2 sites. WSSV outbreak, market timing, export compliance."
+    grader:
+      endpoint: "GET /task/3/grade"
+      score_range: [0.0, 1.0]
 reward:
   range: [-1.0, 1.0]
   components:
