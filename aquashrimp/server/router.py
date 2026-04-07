@@ -163,7 +163,7 @@ def make_router(task_id: int) -> APIRouter:
 
     @r.get("/health")
     async def health():
-        return {"status": "ok", "task_id": task_id}
+        return {"status": "healthy", "task_id": task_id}
 
     @r.post("/reset")
     async def reset(request: ResetRequest = ResetRequest()):

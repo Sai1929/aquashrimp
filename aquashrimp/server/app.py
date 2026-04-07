@@ -5,7 +5,7 @@ The legacy root endpoints (/reset, /step, /grade, /state) still work and
 are routed to the task set by AQUASHRIMP_TASK env var (default 1).
 """
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from aquashrimp.server.router import make_router, router as default_router
 
 TASK_NAMES = {
@@ -69,6 +69,72 @@ async def metadata():
             }
             for tid in [1, 2, 3]
         ],
+    }
+
+
+@app.get("/schema", tags=["Info"])
+async def schema():
+    """OpenEnv standard schema endpoint — returns JSON schemas for action/observation/state."""
+    return {
+        "action": {
+            "type": "object",
+            "description": "Daily farm management action (Task 1 / NurseryPond default)",
+            "properties": {
+                "feed_kg":             {"type": "number",  "minimum": 0,   "maximum": 50},
+                "feeding_frequency":   {"type": "integer", "minimum": 2,   "maximum": 6},
+                "aeration_hours":      {"type": "number",  "minimum": 0,   "maximum": 24},
+                "water_exchange_frac": {"type": "number",  "minimum": 0.0, "maximum": 0.15},
+                "check_feeding_trays": {"type": "boolean"},
+                "lime_application_kg": {"type": "number",  "minimum": 0,   "maximum": 20},
+            },
+            "required": [
+                "feed_kg", "feeding_frequency", "aeration_hours",
+                "water_exchange_frac", "check_feeding_trays", "lime_application_kg",
+            ],
+        },
+        "observation": {
+            "type": "object",
+            "description": "Daily pond state observation",
+            "properties": {
+                "day":                       {"type": "integer"},
+                "mean_weight_g":             {"type": "number"},
+                "survival_rate":             {"type": "number"},
+                "do_mg_l":                   {"type": "number"},
+                "ph":                        {"type": "number"},
+                "temperature_c":             {"type": "number"},
+                "tan_mg_l":                  {"type": "number"},
+                "feed_demand_estimate_kg":   {"type": "number"},
+                "reward":                    {"type": "number"},
+                "grade":                     {"type": "number"},
+                "done":                      {"type": "boolean"},
+            },
+        },
+        "state": {
+            "type": "object",
+            "description": "Episode state",
+            "properties": {
+                "day":       {"type": "integer"},
+                "done":      {"type": "boolean"},
+                "max_steps": {"type": "integer"},
+            },
+        },
+    }
+
+
+@app.post("/mcp", tags=["MCP"])
+async def mcp(request: Request):
+    """OpenEnv standard MCP endpoint — minimal JSON-RPC 2.0 response."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return {
+        "jsonrpc": "2.0",
+        "result": {
+            "capabilities": {"environment": True, "tasks": 3},
+            "name": "aquashrimp",
+        },
+        "id": body.get("id") if isinstance(body, dict) else None,
     }
 
 
