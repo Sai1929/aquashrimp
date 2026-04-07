@@ -166,23 +166,13 @@ def main() -> int:
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
-    # Load required env vars
-    api_base_url = os.environ.get("API_BASE_URL")
-    model_name = os.environ.get("MODEL_NAME")
-    hf_token = os.environ.get("HF_TOKEN")
+    # Load env vars — fall back to sensible defaults so the script always runs
+    api_base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+    model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+    hf_token = os.environ.get("HF_TOKEN", "")
 
-    if not api_base_url:
-        print("ERROR: API_BASE_URL environment variable not set.", file=sys.stderr)
-        print("  export API_BASE_URL=https://api-inference.huggingface.co/v1", file=sys.stderr)
-        return 1
-    if not model_name:
-        print("ERROR: MODEL_NAME environment variable not set.", file=sys.stderr)
-        print("  export MODEL_NAME=meta-llama/Llama-3.3-70B-Instruct", file=sys.stderr)
-        return 1
     if not hf_token:
-        print("ERROR: HF_TOKEN environment variable not set.", file=sys.stderr)
-        print("  export HF_TOKEN=hf_...", file=sys.stderr)
-        return 1
+        print("WARNING: HF_TOKEN not set — LLM calls will fail; using rule-based fallback.", file=sys.stderr)
 
     # Build OpenAI-compatible client
     client = OpenAI(api_key=hf_token, base_url=api_base_url)
@@ -194,15 +184,20 @@ def main() -> int:
         health = _get(f"{env_url}/health")
         print(f"Connected: {env_url}  task_id={health.get('task_id', '?')}")
     except Exception as e:
-        print(f"ERROR: Cannot reach {env_url}/health — {e}", file=sys.stderr)
-        return 1
+        print(f"WARNING: Cannot reach {env_url}/health — {e}", file=sys.stderr)
+        print("Proceeding anyway; episode will fail gracefully if server is unreachable.", file=sys.stderr)
 
     print(f"Model: {model_name}  |  API: {api_base_url}")
 
     grades = []
     for ep in range(args.episodes):
         print(f"\nEpisode {ep + 1}/{args.episodes}  (seed={args.seed + ep})")
-        result = run_episode(env_url, client, model_name, seed=args.seed + ep, verbose=args.verbose)
+        try:
+            result = run_episode(env_url, client, model_name, seed=args.seed + ep, verbose=args.verbose)
+        except Exception as e:
+            print(f"  WARNING: Episode failed — {e}", file=sys.stderr)
+            grades.append(0.0)
+            continue
         grades.append(result["grade"])
         print(
             f"  => steps={result['steps']}  "
