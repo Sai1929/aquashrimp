@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """AquaShrimp OpenEnv — LLM inference script.
 
-Uses an LLM (via OpenAI-compatible client) as the agent to manage a shrimp
-aquaculture farm through the AquaShrimp HTTP environment API.
+Uses an OpenAI-compatible client to drive a shrimp aquaculture farm agent.
 
-Required environment variables:
-    API_BASE_URL   The API endpoint for the LLM (OpenAI-compatible).
-    MODEL_NAME     The model identifier to use for inference.
-    HF_TOKEN       Your Hugging Face / API key.
+Environment variables (with defaults):
+    API_BASE_URL   LLM endpoint  (default: https://router.huggingface.co/v1)
+    MODEL_NAME     Model id       (default: meta-llama/Llama-3.3-70B-Instruct)
+    HF_TOKEN       HF / API key   (default: "" — LLM falls back to rule-based)
 
-Usage:
-    export API_BASE_URL="https://api-inference.huggingface.co/v1"
-    export MODEL_NAME="meta-llama/Llama-3.3-70B-Instruct"
-    export HF_TOKEN="hf_..."
-    python inference.py --env-url https://vsai00-aquashrimp-task1.hf.space
+STDOUT format (parsed by validator):
+    [START] task=<task> env=<benchmark> model=<model>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...>
 """
 from __future__ import annotations
 import argparse
@@ -21,9 +19,40 @@ import json
 import os
 import sys
 import urllib.request
-import urllib.error
 
 from openai import OpenAI
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME   = os.getenv("MODEL_NAME")   or "meta-llama/Llama-3.3-70B-Instruct"
+API_KEY      = os.getenv("HF_TOKEN")     or os.getenv("API_KEY") or ""
+
+BENCHMARK            = "aquashrimp"
+SUCCESS_SCORE_THRESHOLD = 0.1
+
+# ── Structured log helpers ────────────────────────────────────────────────────
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error) -> None:
+    error_val = error if error else "null"
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} "
+        f"done={str(done).lower()} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} "
+        f"score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 # ── Environment HTTP helpers ──────────────────────────────────────────────────
@@ -57,9 +86,7 @@ Key rules:
 - Check feeding trays to detect disease early (low tray consumption = disease warning)
 - Increase water exchange (0.08-0.10) when TAN > 0.1 mg/L
 
-You will receive the current observation as JSON and must respond with ONLY a valid JSON action object.
-
-For Task 1 (NurseryPond), your response must be a JSON object with these fields:
+You will receive the current observation as JSON and must respond with ONLY a valid JSON action object:
 {
   "feed_kg": <float, 0-50>,
   "feeding_frequency": <int, 2-6>,
@@ -72,146 +99,124 @@ For Task 1 (NurseryPond), your response must be a JSON object with these fields:
 Respond with ONLY the JSON object, no explanation."""
 
 
-def get_llm_action(client: OpenAI, model: str, obs: dict) -> dict:
-    """Ask the LLM to choose an action given the current observation."""
-    obs_summary = {
-        k: v for k, v in obs.items()
-        if k not in ("reward_breakdown", "done", "reward")
+def _fallback_action(obs: dict) -> dict:
+    return {
+        "feed_kg": float(obs.get("feed_demand_estimate_kg", 8.0)),
+        "feeding_frequency": 4,
+        "aeration_hours": 20.0,
+        "water_exchange_frac": 0.05,
+        "check_feeding_trays": True,
+        "lime_application_kg": 5.0 if obs.get("ph", 8.0) < 7.8 else 0.0,
     }
-    user_msg = f"Current farm observation (day {obs.get('day', 0)}):\n{json.dumps(obs_summary, indent=2)}\n\nWhat action do you take?"
 
-    def _fallback_action() -> dict:
-        return {
-            "feed_kg": float(obs.get("feed_demand_estimate_kg", 8.0)),
-            "feeding_frequency": 4,
-            "aeration_hours": 20.0,
-            "water_exchange_frac": 0.05,
-            "check_feeding_trays": True,
-            "lime_application_kg": 5.0 if obs.get("ph", 8.0) < 7.8 else 0.0,
-        }
 
+def get_llm_action(client: OpenAI, obs: dict) -> dict:
+    obs_summary = {k: v for k, v in obs.items() if k not in ("reward_breakdown", "done", "reward")}
+    user_msg = (
+        f"Current farm observation (day {obs.get('day', 0)}):\n"
+        f"{json.dumps(obs_summary, indent=2)}\n\nWhat action do you take?"
+    )
     try:
         response = client.chat.completions.create(
-            model=model,
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
+                {"role": "user",   "content": user_msg},
             ],
             temperature=0.1,
             max_tokens=256,
         )
-    except Exception as e:
-        print(f"  [LLM API error: {e}] — using rule-based fallback", flush=True)
-        return _fallback_action()
-
-    content = response.choices[0].message.content.strip()
-
-    # Parse JSON from LLM response
-    try:
-        # Strip markdown code fences if present
+        content = response.choices[0].message.content.strip()
         if "```" in content:
             content = content.split("```")[1]
             if content.startswith("json"):
                 content = content[4:]
         return json.loads(content.strip())
-    except json.JSONDecodeError:
-        return _fallback_action()
+    except Exception as e:
+        print(f"[DEBUG] LLM error: {e} — using rule-based fallback", file=sys.stderr, flush=True)
+        return _fallback_action(obs)
 
 
 # ── Episode runner ─────────────────────────────────────────────────────────────
 
-def run_episode(env_url: str, client: OpenAI, model: str, seed: int = 42, verbose: bool = False) -> dict:
-    """Run one full episode using the LLM as the agent."""
-    obs = _post(f"{env_url}/reset", {"seed": seed})
-    total_reward = 0.0
-    steps = 0
+def run_episode(env_url: str, client: OpenAI, seed: int, task_name: str) -> None:
+    """Run one full episode, emitting [START] / [STEP] / [END] to stdout."""
+    rewards: list[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
 
-    while not obs.get("done", False):
-        action = get_llm_action(client, model, obs)
-        obs = _post(f"{env_url}/step", action)
-        total_reward += obs.get("reward", 0.0)
-        steps += 1
-        if verbose:
-            print(
-                f"  step {steps:3d}: reward={obs.get('reward', 0):+.4f}  "
-                f"grade={obs.get('grade', 0):.4f}  "
-                f"weight={obs.get('mean_weight_g', 0):.2f}g",
-                flush=True,
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+
+    try:
+        obs = _post(f"{env_url}/reset", {"seed": seed})
+
+        while not obs.get("done", False):
+            action = get_llm_action(client, obs)
+            error_str = None
+            try:
+                obs = _post(f"{env_url}/step", action)
+            except Exception as e:
+                error_str = str(e)
+                obs = {"done": True, "reward": 0.0}
+
+            reward = float(obs.get("reward", 0.0))
+            done   = bool(obs.get("done", False))
+            rewards.append(reward)
+            steps_taken += 1
+
+            log_step(
+                step=steps_taken,
+                action=json.dumps(action, separators=(",", ":")),
+                reward=reward,
+                done=done,
+                error=error_str,
             )
 
-    grade_resp = _get(f"{env_url}/grade")
-    return {
-        "seed": seed,
-        "steps": steps,
-        "total_reward": round(total_reward, 4),
-        "mean_reward": round(total_reward / max(steps, 1), 4),
-        "grade": round(grade_resp["grade"], 6),
-    }
+        # Fetch final grade
+        try:
+            grade_resp = _get(f"{env_url}/grade")
+            score = float(grade_resp.get("grade", 0.0))
+        except Exception:
+            score = sum(rewards) / max(len(rewards), 1) if rewards else 0.0
+
+        score   = min(max(score, 0.0), 1.0)
+        success = score >= SUCCESS_SCORE_THRESHOLD
+
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="AquaShrimp OpenEnv LLM inference",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--env-url", default="http://localhost:7860",
-        help="AquaShrimp environment base URL (default: http://localhost:7860)",
-    )
-    parser.add_argument("--seed", type=int, default=42)
+    parser = argparse.ArgumentParser(description="AquaShrimp OpenEnv LLM inference")
+    parser.add_argument("--env-url",  default="http://localhost:7860")
+    parser.add_argument("--seed",     type=int, default=42)
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
-    # Load env vars — fall back to sensible defaults so the script always runs
-    api_base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-    model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
-    hf_token = os.environ.get("HF_TOKEN", "")
-
-    if not hf_token:
+    if not API_KEY:
         print("WARNING: HF_TOKEN not set — LLM calls will fail; using rule-based fallback.", file=sys.stderr)
 
-    # Build OpenAI-compatible client
-    client = OpenAI(api_key=hf_token, base_url=api_base_url)
-
+    client  = OpenAI(api_key=API_KEY or "dummy", base_url=API_BASE_URL)
     env_url = args.env_url.rstrip("/")
 
-    # Health check
+    # Resolve task name from health endpoint (best-effort)
+    task_name = "AquaShrimp"
     try:
-        health = _get(f"{env_url}/health")
-        print(f"Connected: {env_url}  task_id={health.get('task_id', '?')}")
+        health    = _get(f"{env_url}/health")
+        task_id   = health.get("task_id", 1)
+        task_name = {1: "NurseryPond", 2: "SemiIntensiveFarm", 3: "CommercialGrowOut"}.get(int(task_id), "AquaShrimp")
     except Exception as e:
-        print(f"WARNING: Cannot reach {env_url}/health — {e}", file=sys.stderr)
-        print("Proceeding anyway; episode will fail gracefully if server is unreachable.", file=sys.stderr)
+        print(f"WARNING: Cannot reach {env_url}/health — {e}", file=sys.stderr, flush=True)
 
-    print(f"Model: {model_name}  |  API: {api_base_url}")
-
-    grades = []
     for ep in range(args.episodes):
-        print(f"\nEpisode {ep + 1}/{args.episodes}  (seed={args.seed + ep})")
         try:
-            result = run_episode(env_url, client, model_name, seed=args.seed + ep, verbose=args.verbose)
+            run_episode(env_url, client, seed=args.seed + ep, task_name=task_name)
         except Exception as e:
-            print(f"  WARNING: Episode failed — {e}", file=sys.stderr)
-            grades.append(0.0)
-            continue
-        grades.append(result["grade"])
-        print(
-            f"  => steps={result['steps']}  "
-            f"total_reward={result['total_reward']:+.4f}  "
-            f"mean_reward={result['mean_reward']:+.4f}  "
-            f"grade={result['grade']:.4f}"
-        )
+            print(f"WARNING: Episode {ep + 1} failed — {e}", file=sys.stderr, flush=True)
 
-    mean_grade = sum(grades) / len(grades)
-    print(f"\n{'='*50}")
-    print(f"Model    : {model_name}")
-    print(f"Episodes : {args.episodes}  |  Seed: {args.seed}")
-    print(f"Mean grade: {mean_grade:.4f}  (range [0.0, 1.0])")
-    print(f"{'='*50}")
     return 0
 
 
