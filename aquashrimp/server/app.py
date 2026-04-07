@@ -32,6 +32,46 @@ for _tid in [1, 2, 3]:
     )
 
 
+_TASK_IDS = {
+    1: "nursery_pond",
+    2: "semi_intensive_farm",
+    3: "commercial_grow_out",
+}
+_MAX_STEPS = {1: 30, 2: 60, 3: 90}
+
+
+@app.get("/metadata", tags=["Info"])
+async def metadata():
+    """OpenEnv standard metadata endpoint — lists all tasks and their graders."""
+    return {
+        "name": "aquashrimp",
+        "version": "1.0.0",
+        "description": (
+            "AquaShrimp: Precision shrimp aquaculture operations management. "
+            "Agent manages Litopenaeus vannamei farms."
+        ),
+        "tasks": [
+            {
+                "id": _TASK_IDS[tid],
+                "display_name": TASK_NAMES[tid],
+                "max_steps": _MAX_STEPS[tid],
+                "grader": {
+                    "endpoint": f"GET /task/{tid}/grade",
+                    "score_range": [0.0, 1.0],
+                },
+                "endpoints": {
+                    "reset":  f"/task/{tid}/reset",
+                    "step":   f"/task/{tid}/step",
+                    "grade":  f"/task/{tid}/grade",
+                    "state":  f"/task/{tid}/state",
+                    "health": f"/task/{tid}/health",
+                },
+            }
+            for tid in [1, 2, 3]
+        ],
+    }
+
+
 @app.get("/", tags=["Info"])
 async def root():
     return {
@@ -51,4 +91,5 @@ async def root():
             for tid in [1, 2, 3]
         },
         "docs": "/docs",
+        "metadata": "/metadata",
     }

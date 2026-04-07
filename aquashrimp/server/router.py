@@ -193,11 +193,20 @@ def make_router(task_id: int) -> APIRouter:
 
         return _convert(env.state)
 
+    _MAX_STEPS = {1: 30, 2: 60, 3: 90}
+
     @r.get("/grade")
     async def get_grade():
         env = _get_env()
+        # Return default grade before reset so validators always get a 200
         if env.state is None:
-            raise HTTPException(status_code=400, detail="Call /reset first")
+            return {
+                "grade": 0.0,
+                "task_id": task_id,
+                "episode_done": False,
+                "steps": 0,
+                "max_steps": _MAX_STEPS.get(task_id, 30),
+            }
         return {
             "grade": env.grade,
             "task_id": task_id,
